@@ -5,7 +5,7 @@ import plotly.graph_objects as go
 from datetime import datetime, date, timedelta
 from statsmodels.tsa.holtwinters import ExponentialSmoothing
 from statsmodels.tsa.arima.model import ARIMA
-import sqlite3, json, warnings
+import sqlite3, json, warnings, random
 warnings.filterwarnings('ignore')
 
 # ─── PAGE CONFIG ─────────────────────────────────────────────────────────────
@@ -71,6 +71,91 @@ C = {
 }
 
 # ─── SYNTHETIC DATA ──────────────────────────────────────────────────────────
+# ─── WFM TRIVIA ──────────────────────────────────────────────────────────────
+WFM_FACTS = [
+    (
+        "The Man Behind the Math",
+        "Agner Krarup Erlang, a Danish mathematician, developed the Erlang C formula in 1917 "
+        "while working for the Copenhagen Telephone Company. He died in 1929 — decades before "
+        "the modern contact center existed — never knowing his math would become the backbone "
+        "of an entire global industry."
+    ),
+    (
+        "The 80/20 Rule Has No Scientific Basis",
+        "The ubiquitous '80% of calls answered in 20 seconds' service level target was never "
+        "derived from research. It was reportedly chosen by a telecom manager in the 1980s "
+        "because it simply felt right. It stuck, became the industry default, and has been "
+        "questioned — and quietly accepted — ever since."
+    ),
+    (
+        "IEX TotalView: The OG WFM Platform",
+        "IEX Corporation was founded in 1988 and launched TotalView, one of the first software "
+        "platforms dedicated entirely to contact center workforce management. It was acquired by "
+        "NICE Systems in 2005 and lives on today as NICE IEX WFM — still running in thousands "
+        "of centers worldwide."
+    ),
+    (
+        "The First Call Center",
+        "The first recognized call center was established by Birmingham Press and Mail in the "
+        "United Kingdom in 1965. Agents handled inbound calls on a GEC PABX A private branch "
+        "exchange. Workforce management, at that point, was a clipboard and a prayer."
+    ),
+    (
+        "Shrinkage Came from Retail",
+        "The term 'shrinkage' in WFM was borrowed directly from retail inventory management, "
+        "where it described goods lost to theft or damage. Someone in the 1980s noticed that "
+        "scheduled agent time 'shrinks' before it ever hits the phones — and the name stuck "
+        "across the entire industry."
+    ),
+    (
+        "The First ACD Went to an Airline",
+        "The first Automatic Call Distributor (ACD) was installed at Continental Airlines in "
+        "1973 to route flight reservation calls. Before ACDs, calls were manually transferred "
+        "by switchboard operators — workforce management was literally just headcount and hope."
+    ),
+    (
+        "Occupancy Has a Breaking Point",
+        "Research consistently shows that agent burnout and error rates rise sharply when "
+        "occupancy exceeds 85–88%. Yet many contact centers routinely target 90%+. The math "
+        "says you're borrowing productivity from tomorrow — and tomorrow always collects."
+    ),
+    (
+        "Erlang Never Saw a Contact Center",
+        "When Erlang published his queuing theory, the concept of a 'contact center' didn't "
+        "exist. His goal was simply to figure out how many telephone circuits Copenhagen needed. "
+        "The Erlang C formula he wrote by hand is still used — largely unchanged — in every "
+        "modern WFM platform today."
+    ),
+    (
+        "Chat Changed Everything",
+        "When live chat became mainstream in the late 1990s, WFM teams had to rethink "
+        "everything. Erlang C assumes one interaction per agent at a time. Concurrent chat "
+        "handling broke that assumption entirely, forcing vendors to build new concurrency "
+        "models almost from scratch."
+    ),
+    (
+        "Frederick Taylor's Ghost",
+        "The scientific principles behind WFM trace back to Frederick Winslow Taylor's "
+        "'Scientific Management' theory from 1911 — optimizing factory worker output through "
+        "precise measurement and scheduling. Contact centers essentially applied his factory "
+        "floor logic to phone lines, a century later."
+    ),
+    (
+        "Genesys and the World Wide Web",
+        "Genesys was founded in 1990 — the same year Tim Berners-Lee invented the World Wide "
+        "Web. The two technologies grew up together, and eventually collided: today's contact "
+        "centers run almost entirely on the web infrastructure that didn't exist when modern "
+        "WFM was born."
+    ),
+    (
+        "Half-Hour vs. 15-Minute Intervals",
+        "Early WFM systems used 30-minute scheduling intervals because that's what the hardware "
+        "could handle. As processing power improved through the 1990s, 15-minute intervals "
+        "became the standard — cutting scheduling error in half overnight and making every "
+        "WFM analyst's job simultaneously more precise and more complicated."
+    ),
+]
+
 @st.cache_data(show_spinner=False)
 def generate_data():
     np.random.seed(42)
@@ -593,15 +678,75 @@ def main():
                     fdf=fdf, all_fc=all_fc)
 
     if run_btn:
+        fact_title, fact_text = random.choice(WFM_FACTS)
+        _overlay = st.empty()
+        _overlay.markdown(f"""
+<style>
+@keyframes wfm-pulse {{
+    0%, 100% {{ opacity: 1; transform: scale(1); }}
+    50%       {{ opacity: 0.55; transform: scale(0.92); }}
+}}
+@keyframes wfm-bar {{
+    0%   {{ width: 0%; }}
+    100% {{ width: 92%; }}
+}}
+</style>
+<div style="
+    position:fixed; inset:0; z-index:99999;
+    background:rgba(16,17,22,0.93);
+    display:flex; align-items:center; justify-content:center;
+    backdrop-filter:blur(4px);
+">
+  <div style="
+      background:#1E2028;
+      border:1px solid #3A3D4E;
+      border-radius:20px;
+      padding:48px 52px;
+      max-width:560px;
+      width:90%;
+      text-align:center;
+      box-shadow:0 16px 64px rgba(0,0,0,0.7);
+  ">
+    <div style="animation:wfm-pulse 1.5s ease-in-out infinite; font-size:36px; margin-bottom:18px;">📡</div>
+    <div style="color:#A884FF; font-size:21px; font-weight:700; font-family:system-ui; letter-spacing:-0.01em; margin-bottom:6px;">
+      Forecast Generating
+    </div>
+    <div style="color:#5A4080; font-size:13px; margin-bottom:20px; font-family:system-ui;">
+      Running Voice · Chat · Email independently
+    </div>
+    <div style="background:#2A2D3A; border-radius:4px; height:3px; width:100%; margin-bottom:32px; overflow:hidden;">
+      <div style="background:linear-gradient(90deg,#7A4DDB,#A884FF); height:100%; border-radius:4px;
+                  animation:wfm-bar 3s ease-out forwards;"></div>
+    </div>
+    <div style="
+        border-top:1px solid #2E3245;
+        padding-top:24px;
+    ">
+      <div style="color:#D6B85A; font-size:11px; font-weight:700; text-transform:uppercase;
+                  letter-spacing:0.12em; margin-bottom:10px;">
+        💡 Did you know?
+      </div>
+      <div style="color:#DCCBFF; font-size:15px; font-weight:600; margin-bottom:10px; font-family:system-ui;">
+        {fact_title}
+      </div>
+      <div style="color:#8A8EA8; font-size:13.5px; line-height:1.75; font-family:system-ui;">
+        {fact_text}
+      </div>
+    </div>
+  </div>
+</div>
+""", unsafe_allow_html=True)
+
         channel_results = {}
-        with st.spinner('Running forecasts independently for Voice, Chat, and Email...'):
-            for ch in CHANNELS:
-                series = aggregate_channel(df, ch, units)
-                channel_results[ch] = run_channel(series, model, horizon, units)
-                save_forecast(ch, channel_results[ch]['model_label'],
-                              units, horizon, channel_results[ch]['err'],
-                              channel_results[ch]['params'],
-                              channel_results[ch]['fdf'])
+        for ch in CHANNELS:
+            series = aggregate_channel(df, ch, units)
+            channel_results[ch] = run_channel(series, model, horizon, units)
+            save_forecast(ch, channel_results[ch]['model_label'],
+                          units, horizon, channel_results[ch]['err'],
+                          channel_results[ch]['params'],
+                          channel_results[ch]['fdf'])
+
+        _overlay.empty()
         st.session_state['ch_results']  = channel_results
         st.session_state['run_units']   = units
         st.session_state['run_model']   = model

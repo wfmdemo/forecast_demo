@@ -410,6 +410,11 @@ def make_chart(history, forecast, queue, model_label, units):
     return fig
 
 # ─── MULTI-CHANNEL CHART ─────────────────────────────────────────────────────
+def _hov(v):
+    """Format a single numeric value for chart hover tooltips."""
+    v = float(v)
+    return f"{v/1000:.1f}K" if v >= 10000 else f"{v:,.0f}"
+
 def make_multichannel_chart(channel_results, display_window, units, model_label):
     fig = go.Figure()
     last_hist_date = None
@@ -433,7 +438,9 @@ def make_multichannel_chart(channel_results, display_window, units, model_label)
         fig.add_trace(go.Scatter(
             x=display.index, y=display.values,
             name=f'{channel}', legendgroup=channel,
-            mode='lines', line=dict(color=col['line'], width=2)
+            mode='lines', line=dict(color=col['line'], width=2),
+            customdata=[_hov(v) for v in display.values],
+            hovertemplate='%{customdata}<extra>' + channel + '</extra>'
         ))
         fig.add_trace(go.Scatter(
             x=bridge_x + bridge_x[::-1],
@@ -441,6 +448,7 @@ def make_multichannel_chart(channel_results, display_window, units, model_label)
             fill='toself', fillcolor=col['fill'],
             line=dict(color='rgba(0,0,0,0)'),
             legendgroup=channel, showlegend=False,
+            hoverinfo='skip',
             name=f'{channel} ±10%'
         ))
         fig.add_trace(go.Scatter(
@@ -449,7 +457,9 @@ def make_multichannel_chart(channel_results, display_window, units, model_label)
             legendgroup=channel, showlegend=True,
             mode='lines+markers',
             line=dict(color=col['line'], width=2.5, dash='dash'),
-            marker=dict(size=5, color=col['line'])
+            marker=dict(size=5, color=col['line']),
+            customdata=[_hov(v) for v in bridge_y],
+            hovertemplate='%{customdata}<extra>' + channel + ' forecast</extra>'
         ))
 
     if last_hist_date:

@@ -325,6 +325,13 @@ def m_auto_select(series, n, units):
 # ─── CHART ───────────────────────────────────────────────────────────────────
 def make_chart(history, forecast, queue, model_label, units):
     ci = forecast * 0.10
+
+    # Bridge point — last historical value prepended to forecast so lines connect
+    bridge_x = [history.index[-1]]  + list(forecast.index)
+    bridge_y = [history.values[-1]] + list(forecast.values)
+    ci_upper  = [history.values[-1]] + list((forecast + ci).values)
+    ci_lower  = [history.values[-1]] + list((forecast - ci).values)
+
     fig = go.Figure()
 
     fig.add_trace(go.Scatter(
@@ -333,13 +340,13 @@ def make_chart(history, forecast, queue, model_label, units):
         line=dict(color=C['purple'], width=2)
     ))
     fig.add_trace(go.Scatter(
-        x=list(forecast.index) + list(forecast.index[::-1]),
-        y=list((forecast + ci).values) + list((forecast - ci).values[::-1]),
+        x=bridge_x + bridge_x[::-1],
+        y=ci_upper  + ci_lower[::-1],
         fill='toself', fillcolor='rgba(122,77,219,0.18)',
         line=dict(color='rgba(0,0,0,0)'), name='±10% band'
     ))
     fig.add_trace(go.Scatter(
-        x=forecast.index, y=forecast.values,
+        x=bridge_x, y=bridge_y,
         name=f'Forecast ({model_label})', mode='lines+markers',
         line=dict(color=C['violet'], width=2.5, dash='dash'),
         marker=dict(size=5, color=C['lavender'])
@@ -411,16 +418,6 @@ def main():
             value=hdefault[units],
             step=1
         )
-
-        st.divider()
-        st.markdown('**Chart: historical window**')
-        display_limits  = {'Daily': (7, 365, 30), 'Weekly': (2, 52, 12), 'Monthly': (2, 12, 6)}
-        d_min, d_max, d_def = display_limits[units]
-        display_window = st.slider(
-            f'Show last N {units.lower()}',
-            d_min, d_max, d_def
-        )
-        st.caption('Does not affect forecast calculations.')
 
         st.divider()
         run_btn = st.button('▶  Run Forecast', use_container_width=True)
@@ -496,7 +493,20 @@ def main():
     if 'result' in st.session_state:
         r = st.session_state['result']
 
-        # Always re-slice from full series so slider updates chart instantly
+        # Historical window control — lives above the chart, display only
+        display_limits = {'Daily': (7, 365, 30), 'Weekly': (2, 52, 12), 'Monthly': (2, 12, 6)}
+        d_min, d_max, d_def = display_limits[r['units']]
+        win_col, _ = st.columns([1, 3])
+        with win_col:
+            display_window = st.number_input(
+                f'Historical window ({r["units"].lower()})',
+                min_value=d_min,
+                max_value=d_max,
+                value=d_def,
+                step=1,
+                help='Controls how much history is shown on the chart. Does not affect forecast calculations.'
+            )
+
         live_display = r['series'].iloc[-display_window:]
         fig = make_chart(live_display, r['fc'], r['queue'], r['model_label'], r['units'])
         st.plotly_chart(fig, use_container_width=True)
@@ -507,6 +517,9 @@ def main():
             st.markdown('#### Forecast Values')
             out = r['fdf'].copy()
             out['date'] = pd.to_datetime(out['date']).dt.strftime('%b %d, %Y')
+            out['forecasted_offered'] = out['forecasted_offered'].apply(
+                lambda x: f"{x:,.1f}" if x >= 10000 else f"{int(x):,}"
+            )
             out.columns = ['Date', 'Forecasted Volume']
             st.dataframe(out, use_container_width=True, hide_index=True, height=320)
 

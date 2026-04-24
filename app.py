@@ -175,54 +175,125 @@ def wmape(actual, pred):
         return 0.0
     return float(np.sum(np.abs(a[mask] - p[mask])) / np.sum(a[mask]))
 
+# ─── SEASONAL HELPERS ────────────────────────────────────────────────────────
+def get_seasonal_factors(series, units):
+    """Derive day-of-week (daily) or month-of-year (monthly) scaling factors."""
+    try:
+        overall = series.mean()
+        if overall <= 0:
+            return None, {}
+        if units == 'Daily' and len(series) >= 14:
+            avg_dow = series.groupby(series.index.dayofweek).mean()
+            return 'dow', (avg_dow / overall).to_dict()
+        if units == 'Weekly' and len(series) >= 12:
+            avg_woy = series.groupby(series.index.isocalendar().week.astype(int)).mean()
+            return 'woy', (avg_woy / overall).to_dict()
+        if units == 'Monthly' and len(series) >= 6:
+            avg_moy = series.groupby(series.index.month).mean()
+            return 'moy', (avg_moy / overall).to_dict()
+    except Exception:
+        pass
+    return None, {}
+
+def apply_seasonal(idx, base_vals, s_type, factors):
+    """Scale an array of base values by seasonal factor for each date."""
+    base = np.asarray(base_vals, dtype=float)
+    result = []
+    for i, dt in enumerate(idx):
+        bv = base[i] if i < len(base) else base[-1]
+        if s_type == 'dow':
+            f = factors.get(dt.dayofweek, 1.0)
+        elif s_type == 'woy':
+            f = factors.get(int(dt.isocalendar()[1]), 1.0)
+        elif s_type == 'moy':
+            f = factors.get(dt.month, 1.0)
+        else:
+            f = 1.0
+        result.append(max(0.0, bv * f))
+    return np.array(result)
+
 # ─── FORECAST MODELS ─────────────────────────────────────────────────────────
 def m_hist_avg(series, n, units, lookback=10):
-    base = float(series.iloc[-lookback:].mean())
-    return pd.Series([base]*n, index=future_index(series.index[-1], units, n)), \
-           {'lookback_periods': lookback}
+    base  = float(series.iloc[-lookback:].mean())
+    idx   = future_index(series.index[-1], units, n)
+    stype, factors = get_seasonal_factors(series, units)
+    vals  = apply_seasonal(idx, np.full(n, base), stype, factors)
+    return pd.Series(vals, index=idx), {'lookback_periods': lookback}
 
 def m_weighted_avg(series, n, units, decay=0.82):
-    vals = series.values[-14:]
-    w = np.array([decay**i for i in range(len(vals)-1, -1, -1)])
-    w /= w.sum()
-    base = float(np.dot(w, vals))
-    return pd.Series([base]*n, index=future_index(series.index[-1], units, n)), \
-           {'decay': decay}
+    vals  = series.values[-14:]
+    w     = np.array([decay**i for i in range(len(vals)-1, -1, -1)])
+    w    /= w.sum()
+    base  = float(np.dot(w, vals))
+    idx   = future_index(series.index[-1], units, n)
+    stype, factors = get_seasonal_factors(series, units)
+    result = apply_seasonal(idx, np.full(n, base), stype, factors)
+    return pd.Series(result, index=idx), {'decay': decay}
 
 def m_linear_reg(series, n, units):
-    x = np.arange(len(series), dtype=float)
-    y = series.values.astype(float)
-    c = np.polyfit(x, y, 1)
-    fx = np.arange(len(series), len(series)+n, dtype=float)
-    vals = np.maximum(0, np.polyval(c, fx))
-    return pd.Series(vals, index=future_index(series.index[-1], units, n)), \
+    x  = np.arange(len(series), dtype=float)
+    y  = series.values.astype(float)
+    c  = np.polyfit(x, y, 1)
+    fx = np.arange(len(series), len(series) + n, dtype=float)
+    trend = np.maximum(0, np.polyval(c, fx))
+    idx   = future_index(series.index[-1], units, n)
+    stype, factors = get_seasonal_factors(series, units)
+    # Scale each trend value relative to the trend mean so shape is preserved
+    tmean = trend.mean() if trend.mean() > 0 else 1.0
+    scaled = []
+    for i, dt in enumerate(idx):
+        if stype == 'dow':
+            f = factors.get(dt.dayofweek, 1.0)
+        elif stype == 'woy':
+            f = factors.get(int(dt.isocalendar()[1]), 1.0)
+        elif stype == 'moy':
+            f = factors.get(dt.month, 1.0)
+        else:
+            f = 1.0
+        scaled.append(max(0.0, trend[i] + (f - 1.0) * tmean))
+    return pd.Series(scaled, index=idx), \
            {'slope': round(c[0], 3), 'intercept': round(c[1], 3)}
 
 def m_exp_smooth(series, n, units):
-    sp = {'Daily':7, 'Weekly':4, 'Monthly':12}[units]
+    sp = {'Daily': 7, 'Weekly': 4, 'Monthly': 12}[units]
     use_seasonal = len(series) >= sp * 3
-    try:
-        fit = ExponentialSmoothing(
-            series,
-            trend='add',
-            seasonal='add' if use_seasonal else None,
-            seasonal_periods=sp if use_seasonal else None,
-            initialization_method='estimated'
-        ).fit(optimized=True, disp=False)
-        fc = fit.forecast(n).clip(lower=0)
-        fc.index = future_index(series.index[-1], units, n)
-        return fc, {'seasonal': use_seasonal, 'seasonal_periods': sp if use_seasonal else None}
-    except Exception:
-        return m_weighted_avg(series, n, units)
+    idx = future_index(series.index[-1], units, n)
+    for init_method in ('heuristic', 'estimated', 'legacy-heuristic'):
+        try:
+            fit = ExponentialSmoothing(
+                series,
+                trend='add',
+                seasonal='add' if use_seasonal else None,
+                seasonal_periods=sp if use_seasonal else None,
+                initialization_method=init_method
+            ).fit(optimized=True, disp=False)
+            fc = fit.forecast(n).clip(lower=0)
+            fc.index = idx
+            return fc, {'seasonal': use_seasonal, 'periods': sp, 'init': init_method}
+        except Exception:
+            continue
+    # Final fallback: weighted avg with seasonality
+    return m_weighted_avg(series, n, units)
 
 def m_arima(series, n, units):
-    try:
-        fit = ARIMA(series, order=(2, 1, 1)).fit()
-        fc = fit.forecast(n).clip(lower=0)
-        fc.index = future_index(series.index[-1], units, n)
-        return fc, {'order': '(2,1,1)'}
-    except Exception:
-        return m_exp_smooth(series, n, units)
+    idx = future_index(series.index[-1], units, n)
+    # Try SARIMA with weekly seasonality for daily data, else plain ARIMA
+    orders = [(2, 1, 2), (1, 1, 1), (2, 1, 1), (1, 1, 0)]
+    for order in orders:
+        try:
+            fit = ARIMA(series, order=order).fit()
+            fc  = fit.forecast(n).clip(lower=0)
+            fc.index = idx
+            # Apply seasonal correction on top of ARIMA output
+            stype, factors = get_seasonal_factors(series, units)
+            if stype:
+                fc_adj = apply_seasonal(idx, fc.values, stype, factors)
+                # Blend: 60% ARIMA, 40% seasonal-adjusted to preserve ARIMA dynamics
+                fc = pd.Series(0.6 * fc.values + 0.4 * fc_adj, index=idx)
+            return fc, {'order': str(order)}
+        except Exception:
+            continue
+    return m_exp_smooth(series, n, units)
 
 MODEL_MAP = {
     'Historical Average':   m_hist_avg,

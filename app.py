@@ -552,6 +552,7 @@ def main():
 
     def run_channel(series, model, horizon, units):
         """Run selected model for one channel's aggregated series."""
+        all_fc = {}
         if model == 'Auto-Select Model':
             fc, params, winner, scores = m_auto_select(series, horizon, units)
             model_label = f'Auto-Select → {winner}'
@@ -559,6 +560,13 @@ def main():
             train, actual = series.iloc[:-holdout], series.iloc[-holdout:].values
             pred_h, _ = MODEL_MAP[winner](train, holdout, units)
             err = wmape(actual, pred_h.values[:len(actual)])
+            # Run every model so we can show all forecasts in the results table
+            for name, fn in MODEL_MAP.items():
+                try:
+                    f, _ = fn(series, horizon, units)
+                    all_fc[name] = f.values.round(0).astype(int)
+                except Exception:
+                    pass
         else:
             fn = MODEL_MAP[model]
             fc, params = fn(series, horizon, units)
@@ -571,7 +579,8 @@ def main():
         fdf = pd.DataFrame({'date': fc.index,
                             'forecasted_offered': fc.values.round(0).astype(int)})
         return dict(series=series, fc=fc, params=params, err=err,
-                    winner=winner, scores=scores, model_label=model_label, fdf=fdf)
+                    winner=winner, scores=scores, model_label=model_label,
+                    fdf=fdf, all_fc=all_fc)
 
     if run_btn:
         channel_results = {}
@@ -583,9 +592,10 @@ def main():
                               units, horizon, channel_results[ch]['err'],
                               channel_results[ch]['params'],
                               channel_results[ch]['fdf'])
-        st.session_state['ch_results'] = channel_results
-        st.session_state['run_units']  = units
-        st.session_state['run_model']  = model
+        st.session_state['ch_results']  = channel_results
+        st.session_state['run_units']   = units
+        st.session_state['run_model']   = model
+        st.session_state['run_horizon'] = horizon
 
     # ── RESULTS ──────────────────────────────────────────────────────────────
     if 'ch_results' in st.session_state:
@@ -600,8 +610,10 @@ def main():
             'Chat':  ctrl_cols[1].checkbox('Chat',  value=True),
             'Email': ctrl_cols[2].checkbox('Email', value=True),
         }
-        display_limits = {'Daily': (7, 365, 30), 'Weekly': (2, 52, 12), 'Monthly': (2, 12, 6)}
-        d_min, d_max, d_def = display_limits[r_units]
+        display_limits = {'Daily': (7, 365), 'Weekly': (2, 52), 'Monthly': (2, 12)}
+        d_min, d_max = display_limits[r_units]
+        r_horizon = st.session_state.get('run_horizon', d_min)
+        d_def = min(d_max, max(d_min, r_horizon))
         with ctrl_cols[3]:
             display_window = st.number_input(
                 f'Historical window ({r_units.lower()})',
@@ -627,12 +639,26 @@ def main():
             with tab:
                 left, right = st.columns([2, 1])
                 with left:
-                    out = r['fdf'].copy()
-                    out['date'] = pd.to_datetime(out['date']).dt.strftime('%b %d, %Y')
-                    out['forecasted_offered'] = out['forecasted_offered'].apply(
-                        lambda x: f"{x:,.1f}" if x >= 10000 else f"{int(x):,}"
-                    )
-                    out.columns = ['Date', 'Forecasted Volume']
+                    def fmt_k(x):
+                        return f"{x/1000:.1f}K" if x >= 1000 else str(int(x))
+
+                    date_strs = pd.to_datetime(r['fdf']['date']).dt.strftime('%b %d, %Y').tolist()
+
+                    if r['all_fc']:
+                        # Auto-Select: winner first, then remaining models alphabetically
+                        others = sorted(k for k in r['all_fc'] if k != r['winner'])
+                        ordered = [r['winner']] + others
+                        tbl = {'Date': date_strs}
+                        for name in ordered:
+                            vals = r['all_fc'][name]
+                            label = f"★ {name}" if name == r['winner'] else name
+                            tbl[label] = [fmt_k(v) for v in vals]
+                        out = pd.DataFrame(tbl)
+                    else:
+                        out = pd.DataFrame({
+                            'Date': date_strs,
+                            'Forecasted Volume': [fmt_k(v) for v in r['fdf']['forecasted_offered']]
+                        })
                     st.dataframe(out, use_container_width=True, hide_index=True, height=280)
                 with right:
                     wmape_pct = r['err'] * 100

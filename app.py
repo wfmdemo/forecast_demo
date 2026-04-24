@@ -5,12 +5,12 @@ import plotly.graph_objects as go
 from datetime import datetime, date, timedelta
 from statsmodels.tsa.holtwinters import ExponentialSmoothing
 from statsmodels.tsa.arima.model import ARIMA
-import sqlite3, json, warnings, random
+import sqlite3, json, warnings, random, time
 warnings.filterwarnings('ignore')
 
 # ─── PAGE CONFIG ─────────────────────────────────────────────────────────────
 st.set_page_config(
-    page_title="WFM Forecasting Suite",
+    page_title="WFM Forecasting",
     page_icon="📊",
     layout="wide",
     initial_sidebar_state="expanded"
@@ -737,6 +737,7 @@ def main():
 </div>
 """, unsafe_allow_html=True)
 
+        _overlay_start = time.time()
         channel_results = {}
         for ch in CHANNELS:
             series = aggregate_channel(df, ch, units)
@@ -745,6 +746,12 @@ def main():
                           units, horizon, channel_results[ch]['err'],
                           channel_results[ch]['params'],
                           channel_results[ch]['fdf'])
+
+        # Hold the overlay for a minimum of 45 seconds so there's time to read the fact
+        _elapsed = time.time() - _overlay_start
+        _min_display = 45
+        if _elapsed < _min_display:
+            time.sleep(_min_display - _elapsed)
 
         _overlay.empty()
         st.session_state['ch_results']  = channel_results

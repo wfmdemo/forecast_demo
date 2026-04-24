@@ -10,7 +10,7 @@ warnings.filterwarnings('ignore')
 
 # ─── PAGE CONFIG ─────────────────────────────────────────────────────────────
 st.set_page_config(
-    page_title="WFM Forecasting",
+    page_title="WFM Forecaster",
     page_icon="📊",
     layout="wide",
     initial_sidebar_state="expanded"
@@ -624,8 +624,66 @@ def main():
         st.caption(f"**{len(df):,}** total records · **{df['queue'].nunique()}** queues")
 
     # ── HEADER ───────────────────────────────────────────────────────────────
-    st.markdown("# 📊 WFM Forecasting Suite")
+    st.markdown("# 📊 WFM Forecaster")
     st.caption(f"Model: **{model}** · Units: **{units}** · Horizon: **{horizon} {units.lower()}**")
+
+    with st.expander("ℹ️  How the models work · What is WMAPE?", expanded=False):
+        st.markdown("""
+#### Forecast Models
+
+**Historical Average**
+Takes the mean volume from the most recent lookback window (default: last 10 periods) and projects
+it forward. Day-of-week seasonal factors are then applied so the forecast reflects realistic
+weekly patterns rather than a flat line. Best used when volume is stable with no clear trend.
+
+**Weighted Average**
+Similar to Historical Average, but recent periods carry more weight than older ones — controlled
+by a decay factor (default: 0.82). Each step back in time reduces a period's influence
+exponentially, so the forecast reacts faster to recent shifts in volume.
+
+**Linear Regression**
+Fits a straight trend line through the entire history and extrapolates it forward. Day-of-week
+seasonality is layered on top of the trend. Best when volume is steadily growing or declining
+over time. Sensitive to outliers at either end of the history.
+
+**Exponential Smoothing (Holt-Winters)**
+Models three components simultaneously: the overall level, the trend direction, and seasonal
+patterns. It updates all three components as new data arrives, making it well-suited for volume
+that has both a clear trend and repeating weekly or monthly rhythms. This is one of the most
+widely used models in production WFM tools.
+
+**ARIMA**
+Auto-Regressive Integrated Moving Average. Uses the statistical relationships between a value
+and its own past values (autoregression) combined with a moving average of past errors to
+generate forecasts. Handles non-stationary data through differencing. More complex than the
+others but can capture subtle patterns the simpler models miss. Seasonal factors are blended
+in on top of the ARIMA output.
+
+**Auto-Select**
+Runs all five models against a holdout window (the most recent 10–15% of your history) and
+measures each one's error on data it never saw during training. The model with the lowest
+WMAPE on that holdout wins and is used for the full forecast. The competition scores are
+shown in the performance tab so you can see how every model ranked.
+
+---
+
+#### WMAPE — Weighted Mean Absolute Percentage Error
+
+WMAPE measures forecast accuracy as a percentage. Lower is better.
+
+| Score | Rating | What it means |
+|---|---|---|
+| < 8% | ✅ Excellent | Forecast is highly reliable |
+| 8–15% | 🟡 Good | Minor variance, usable for planning |
+| 15–25% | 🟠 Moderate | Review inputs, consider a different model |
+| > 25% | 🔴 Review | High error — check for data anomalies or outliers |
+
+**Why WMAPE instead of plain MAPE?** Standard MAPE divides each error by the actual value for
+that period, which means low-volume periods (weekends, holidays) can distort the score
+dramatically even when the absolute miss is small. WMAPE weights each error by its share of
+total volume, so high-volume periods influence the score more — which is exactly what matters
+for staffing decisions.
+        """)
 
     # ── KPI ROW ──────────────────────────────────────────────────────────────
     recent_cutoff = q_data['date'].max() - timedelta(days=30)
@@ -749,7 +807,7 @@ def main():
 
         # Hold the overlay for a minimum of 45 seconds so there's time to read the fact
         _elapsed = time.time() - _overlay_start
-        _min_display = 20
+        _min_display = 12
         if _elapsed < _min_display:
             time.sleep(_min_display - _elapsed)
 

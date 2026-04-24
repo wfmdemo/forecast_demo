@@ -161,6 +161,21 @@ def aggregate(df, queue, units):
         return s.resample('MS').sum()
     return s  # Daily
 
+def aggregate_channel(df, channel, units):
+    """Sum all queues within a channel — each channel runs independently."""
+    s = df[df['channel'] == channel].groupby('date')['offered'].sum().sort_index()
+    if units == 'Weekly':
+        return s.resample('W').sum()
+    if units == 'Monthly':
+        return s.resample('MS').sum()
+    return s
+
+CHANNEL_COLORS = {
+    'Voice': {'line': C['violet'],    'fill': 'rgba(122, 77, 219, 0.15)'},
+    'Chat':  {'line': C['teal'],      'fill': 'rgba( 63,167, 163, 0.15)'},
+    'Email': {'line': C['gold'],      'fill': 'rgba(214,184,  90, 0.15)'},
+}
+
 def future_index(last, units, n):
     if units == 'Daily':
         return pd.date_range(last + timedelta(days=1), periods=n, freq='D')
@@ -380,6 +395,80 @@ def make_chart(history, forecast, queue, model_label, units):
     )
     return fig
 
+# ─── MULTI-CHANNEL CHART ─────────────────────────────────────────────────────
+def make_multichannel_chart(channel_results, display_window, units, model_label):
+    fig = go.Figure()
+    last_hist_date = None
+
+    for channel, res in channel_results.items():
+        if res is None:
+            continue
+        col     = CHANNEL_COLORS[channel]
+        display = res['series'].iloc[-display_window:]
+        fc      = res['fc']
+        ci      = fc * 0.10
+
+        bridge_x = [display.index[-1]]  + list(fc.index)
+        bridge_y = [display.values[-1]] + list(fc.values)
+        ci_upper = [display.values[-1]] + list((fc + ci).values)
+        ci_lower = [display.values[-1]] + list((fc - ci).values)
+
+        if last_hist_date is None:
+            last_hist_date = display.index[-1]
+
+        fig.add_trace(go.Scatter(
+            x=display.index, y=display.values,
+            name=f'{channel}', legendgroup=channel,
+            mode='lines', line=dict(color=col['line'], width=2)
+        ))
+        fig.add_trace(go.Scatter(
+            x=bridge_x + bridge_x[::-1],
+            y=ci_upper  + ci_lower[::-1],
+            fill='toself', fillcolor=col['fill'],
+            line=dict(color='rgba(0,0,0,0)'),
+            legendgroup=channel, showlegend=False,
+            name=f'{channel} ±10%'
+        ))
+        fig.add_trace(go.Scatter(
+            x=bridge_x, y=bridge_y,
+            name=f'{channel} forecast',
+            legendgroup=channel, showlegend=True,
+            mode='lines+markers',
+            line=dict(color=col['line'], width=2.5, dash='dash'),
+            marker=dict(size=5, color=col['line'])
+        ))
+
+    if last_hist_date:
+        fig.add_vline(
+            x=last_hist_date.timestamp() * 1000,
+            line_dash='dot', line_color=C['teal'], line_width=1.5,
+            annotation_text='  Forecast start',
+            annotation_font_color=C['teal'],
+            annotation_font_size=11,
+            annotation_position='top right'
+        )
+
+    fig.update_layout(
+        title=dict(
+            text=f'<b>Channel Forecasts</b> — {units} Offered Volume · {model_label}',
+            font=dict(color=C['lavender'], size=16)
+        ),
+        paper_bgcolor=C['midnight'],
+        plot_bgcolor=C['surface'],
+        font=dict(color=C['ivory'], family='system-ui'),
+        xaxis=dict(gridcolor=C['border'], linecolor=C['border'], title=units),
+        yaxis=dict(gridcolor=C['border'], linecolor=C['border'], title='Offered Contacts'),
+        legend=dict(
+            bgcolor='rgba(0,0,0,0)',
+            font=dict(color=C['ivory']),
+            orientation='h', yanchor='bottom', y=1.02, xanchor='right', x=1
+        ),
+        height=450,
+        margin=dict(l=10, r=10, t=60, b=20),
+        hovermode='x unified'
+    )
+    return fig
+
 # ─── APP ─────────────────────────────────────────────────────────────────────
 def main():
     df   = generate_data()
@@ -390,12 +479,8 @@ def main():
         st.markdown("## ⚙️ Forecast Settings")
         st.divider()
 
-        channel_opts = ['All Channels'] + sorted(df['channel'].unique())
-        ch = st.selectbox('Channel', channel_opts)
-
-        q_list = sorted(df['queue'].unique()) if ch == 'All Channels' \
-                 else sorted(df[df['channel'] == ch]['queue'].unique())
-        queue = st.selectbox('Queue', q_list)
+        # Queue selector — for KPI row context only, not used in forecasting
+        queue = st.selectbox('Queue (KPI reference)', sorted(df['queue'].unique()))
 
         model = st.selectbox('Forecast Model', [
             'Auto-Select Model',
@@ -421,16 +506,17 @@ def main():
 
         st.divider()
         run_btn = st.button('▶  Run Forecast', use_container_width=True)
+        st.caption('Runs Voice, Chat, and Email independently.')
         st.divider()
 
         q_data = df[df['queue'] == queue]
-        st.markdown(f"**Data range**")
+        st.markdown('**Data range**')
         st.caption(f"{df['date'].min().strftime('%b %d, %Y')} → {df['date'].max().strftime('%b %d, %Y')}")
-        st.caption(f"**{len(q_data):,}** records for this queue")
+        st.caption(f"**{len(df):,}** total records · **{df['queue'].nunique()}** queues")
 
     # ── HEADER ───────────────────────────────────────────────────────────────
     st.markdown("# 📊 WFM Forecasting Suite")
-    st.caption(f"Queue: **{queue}** · Model: **{model}** · Horizon: **{horizon} {units.lower()}**")
+    st.caption(f"Model: **{model}** · Units: **{units}** · Horizon: **{horizon} {units.lower()}**")
 
     # ── KPI ROW ──────────────────────────────────────────────────────────────
     recent_cutoff = q_data['date'].max() - timedelta(days=30)
@@ -448,106 +534,106 @@ def main():
         st.info('Please select a forecast model from the sidebar.')
         return
 
+    CHANNELS = ['Voice', 'Chat', 'Email']
+
+    def run_channel(series, model, horizon, units):
+        """Run selected model for one channel's aggregated series."""
+        if model == 'Auto-Select Model':
+            fc, params, winner, scores = m_auto_select(series, horizon, units)
+            model_label = f'Auto-Select → {winner}'
+            holdout = min(max(4, int(len(series) * 0.15)), 10)
+            train, actual = series.iloc[:-holdout], series.iloc[-holdout:].values
+            pred_h, _ = MODEL_MAP[winner](train, holdout, units)
+            err = wmape(actual, pred_h.values[:len(actual)])
+        else:
+            fn = MODEL_MAP[model]
+            fc, params = fn(series, horizon, units)
+            model_label = winner = model
+            scores = None
+            holdout = min(8, max(1, len(series) // 5))
+            train, actual = series.iloc[:-holdout], series.iloc[-holdout:].values
+            pred_h, _ = fn(train, holdout, units)
+            err = wmape(actual, pred_h.values[:len(actual)])
+        fdf = pd.DataFrame({'date': fc.index,
+                            'forecasted_offered': fc.values.round(0).astype(int)})
+        return dict(series=series, fc=fc, params=params, err=err,
+                    winner=winner, scores=scores, model_label=model_label, fdf=fdf)
+
     if run_btn:
-        series  = aggregate(df, queue, units)          # full history — used for all forecasting
-        display = series.iloc[-display_window:]        # display only — chart view only
-
-        with st.spinner('Running forecast models...'):
-            if model == 'Auto-Select Model':
-                fc, params, winner, scores = m_auto_select(series, horizon, units)
-                model_label = f'Auto-Select → {winner}'
-
-                holdout = min(max(4, int(len(series) * 0.15)), 10)
-                train   = series.iloc[:-holdout]
-                actual  = series.iloc[-holdout:].values
-                pred_h, _ = MODEL_MAP[winner](train, holdout, units)
-                err = wmape(actual, pred_h.values[:len(actual)])
-
-            else:
-                fn = MODEL_MAP[model]
-                fc, params = fn(series, horizon, units)
-                model_label = model
-                scores = None
-                winner = model
-
-                holdout = min(8, len(series) // 5)
-                train   = series.iloc[:-holdout]
-                actual  = series.iloc[-holdout:].values
-                pred_h, _ = fn(train, holdout, units)
-                err = wmape(actual, pred_h.values[:len(actual)])
-
-            fdf = pd.DataFrame({
-                'date':              fc.index,
-                'forecasted_offered': fc.values.round(0).astype(int)
-            })
-            save_forecast(queue, model_label, units, horizon, err, params, fdf)
-
-            st.session_state['result'] = dict(
-                series=series, display=display, fc=fc, queue=queue,
-                model_label=model_label, winner=winner,
-                units=units, err=err, params=params,
-                scores=scores, fdf=fdf
-            )
+        channel_results = {}
+        with st.spinner('Running forecasts independently for Voice, Chat, and Email...'):
+            for ch in CHANNELS:
+                series = aggregate_channel(df, ch, units)
+                channel_results[ch] = run_channel(series, model, horizon, units)
+                save_forecast(ch, channel_results[ch]['model_label'],
+                              units, horizon, channel_results[ch]['err'],
+                              channel_results[ch]['params'],
+                              channel_results[ch]['fdf'])
+        st.session_state['ch_results'] = channel_results
+        st.session_state['run_units']  = units
+        st.session_state['run_model']  = model
 
     # ── RESULTS ──────────────────────────────────────────────────────────────
-    if 'result' in st.session_state:
-        r = st.session_state['result']
+    if 'ch_results' in st.session_state:
+        cr    = st.session_state['ch_results']
+        r_units = st.session_state['run_units']
+        r_model = st.session_state['run_model']
 
-        # Historical window control — lives above the chart, display only
+        # Channel checkboxes + historical window — above the chart
+        ctrl_cols = st.columns([1, 1, 1, 2])
+        show = {
+            'Voice': ctrl_cols[0].checkbox('Voice', value=True),
+            'Chat':  ctrl_cols[1].checkbox('Chat',  value=True),
+            'Email': ctrl_cols[2].checkbox('Email', value=True),
+        }
         display_limits = {'Daily': (7, 365, 30), 'Weekly': (2, 52, 12), 'Monthly': (2, 12, 6)}
-        d_min, d_max, d_def = display_limits[r['units']]
-        win_col, _ = st.columns([1, 3])
-        with win_col:
+        d_min, d_max, d_def = display_limits[r_units]
+        with ctrl_cols[3]:
             display_window = st.number_input(
-                f'Historical window ({r["units"].lower()})',
-                min_value=d_min,
-                max_value=d_max,
-                value=d_def,
-                step=1,
-                help='Controls how much history is shown on the chart. Does not affect forecast calculations.'
+                f'Historical window ({r_units.lower()})',
+                min_value=d_min, max_value=d_max, value=d_def, step=1,
+                help='Controls how much history is shown. Does not affect forecast calculations.'
             )
 
-        live_display = r['series'].iloc[-display_window:]
-        fig = make_chart(live_display, r['fc'], r['queue'], r['model_label'], r['units'])
-        st.plotly_chart(fig, use_container_width=True)
+        # Filter to selected channels only
+        visible = {ch: cr[ch] for ch in CHANNELS if show.get(ch) and cr.get(ch)}
 
-        left, right = st.columns([2, 1])
+        if visible:
+            fig = make_multichannel_chart(visible, display_window, r_units,
+                                          cr[list(visible.keys())[0]]['model_label'])
+            st.plotly_chart(fig, use_container_width=True)
+        else:
+            st.info('Select at least one channel above to display the chart.')
 
-        with left:
-            st.markdown('#### Forecast Values')
-            out = r['fdf'].copy()
-            out['date'] = pd.to_datetime(out['date']).dt.strftime('%b %d, %Y')
-            out['forecasted_offered'] = out['forecasted_offered'].apply(
-                lambda x: f"{x:,.1f}" if x >= 10000 else f"{int(x):,}"
-            )
-            out.columns = ['Date', 'Forecasted Volume']
-            st.dataframe(out, use_container_width=True, hide_index=True, height=320)
-
-        with right:
-            st.markdown('#### Model Performance')
-            wmape_pct = r['err'] * 100
-            delta_str = 'Excellent' if wmape_pct < 8 else \
-                        'Good'      if wmape_pct < 15 else \
-                        'Moderate'  if wmape_pct < 25 else 'Review'
-            st.metric('WMAPE (holdout)', f"{wmape_pct:.1f}%", delta=delta_str)
-
-            if r['scores']:
-                st.markdown('**Competition Results**')
-                sc_df = pd.DataFrame([
-                    {'Model': k,
-                     'WMAPE': f"{v*100:.1f}%",
-                     '': '✓ Selected' if k == r['winner'] else ''}
-                    for k, v in sorted(r['scores'].items(), key=lambda x: x[1])
-                ])
-                st.dataframe(sc_df, use_container_width=True, hide_index=True)
-
-            if r['params']:
-                filtered = {k: v for k, v in r['params'].items()
-                            if k != 'competition_scores'}
-                if filtered:
-                    st.markdown('**Parameters**')
-                    for k, v in filtered.items():
-                        st.caption(f"`{k}`: {v}")
+        # Per-channel results tabs
+        st.markdown('#### Forecast Values & Performance')
+        tabs = st.tabs([ch for ch in CHANNELS if cr.get(ch)])
+        for tab, ch in zip(tabs, [ch for ch in CHANNELS if cr.get(ch)]):
+            r = cr[ch]
+            with tab:
+                left, right = st.columns([2, 1])
+                with left:
+                    out = r['fdf'].copy()
+                    out['date'] = pd.to_datetime(out['date']).dt.strftime('%b %d, %Y')
+                    out['forecasted_offered'] = out['forecasted_offered'].apply(
+                        lambda x: f"{x:,.1f}" if x >= 10000 else f"{int(x):,}"
+                    )
+                    out.columns = ['Date', 'Forecasted Volume']
+                    st.dataframe(out, use_container_width=True, hide_index=True, height=280)
+                with right:
+                    wmape_pct = r['err'] * 100
+                    delta_str = 'Excellent' if wmape_pct < 8 else \
+                                'Good'      if wmape_pct < 15 else \
+                                'Moderate'  if wmape_pct < 25 else 'Review'
+                    st.metric('WMAPE (holdout)', f"{wmape_pct:.1f}%", delta=delta_str)
+                    if r['scores']:
+                        st.markdown('**Competition Results**')
+                        sc_df = pd.DataFrame([
+                            {'Model': k, 'WMAPE': f"{v*100:.1f}%",
+                             '': '✓' if k == r['winner'] else ''}
+                            for k, v in sorted(r['scores'].items(), key=lambda x: x[1])
+                        ])
+                        st.dataframe(sc_df, use_container_width=True, hide_index=True)
     else:
         st.markdown(
             '<div style="text-align:center;padding:60px 0;color:#5A34A3;font-size:18px;">'

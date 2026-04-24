@@ -402,12 +402,25 @@ def main():
 
         units = st.selectbox('Forecast Units', ['Daily', 'Weekly', 'Monthly'])
 
-        hlimits  = {'Daily': 90, 'Weekly': 26, 'Monthly': 12}
-        hdefault = {'Daily': 14, 'Weekly': 8,  'Monthly': 3}
-        horizon  = st.slider(
+        hlimits  = {'Daily': 365, 'Weekly': 52, 'Monthly': 24}
+        hdefault = {'Daily': 14,  'Weekly': 8,  'Monthly': 3}
+        horizon  = st.number_input(
             f'Horizon ({units.lower()})',
-            1, hlimits[units], hdefault[units]
+            min_value=1,
+            max_value=hlimits[units],
+            value=hdefault[units],
+            step=1
         )
+
+        st.divider()
+        st.markdown('**Chart: historical window**')
+        display_limits  = {'Daily': (7, 365, 30), 'Weekly': (2, 52, 12), 'Monthly': (2, 12, 6)}
+        d_min, d_max, d_def = display_limits[units]
+        display_window = st.slider(
+            f'Show last N {units.lower()}',
+            d_min, d_max, d_def
+        )
+        st.caption('Does not affect forecast calculations.')
 
         st.divider()
         run_btn = st.button('▶  Run Forecast', use_container_width=True)
@@ -439,9 +452,8 @@ def main():
         return
 
     if run_btn:
-        series  = aggregate(df, queue, units)
-        display = series.iloc[-90:] if units == 'Daily' else \
-                  series.iloc[-52:] if units == 'Weekly' else series
+        series  = aggregate(df, queue, units)          # full history — used for all forecasting
+        display = series.iloc[-display_window:]        # display only — chart view only
 
         with st.spinner('Running forecast models...'):
             if model == 'Auto-Select Model':
@@ -474,7 +486,7 @@ def main():
             save_forecast(queue, model_label, units, horizon, err, params, fdf)
 
             st.session_state['result'] = dict(
-                display=display, fc=fc, queue=queue,
+                series=series, display=display, fc=fc, queue=queue,
                 model_label=model_label, winner=winner,
                 units=units, err=err, params=params,
                 scores=scores, fdf=fdf
@@ -484,7 +496,9 @@ def main():
     if 'result' in st.session_state:
         r = st.session_state['result']
 
-        fig = make_chart(r['display'], r['fc'], r['queue'], r['model_label'], r['units'])
+        # Always re-slice from full series so slider updates chart instantly
+        live_display = r['series'].iloc[-display_window:]
+        fig = make_chart(live_display, r['fc'], r['queue'], r['model_label'], r['units'])
         st.plotly_chart(fig, use_container_width=True)
 
         left, right = st.columns([2, 1])

@@ -853,47 +853,107 @@ for staffing decisions.
 
         # Per-channel results tabs
         st.markdown('#### Forecast Values & Performance')
+
+        def fmt_k(x):
+            return f"{x/1000:.1f}K" if x >= 1000 else str(int(x))
+
+        def wmape_color(pct):
+            if pct < 8:   return '#3FA7A3', 'Excellent'
+            if pct < 15:  return '#A6B85C', 'Good'
+            if pct < 25:  return '#D6B85A', 'Moderate'
+            return '#C65D43', 'Review'
+
         tabs = st.tabs([ch for ch in CHANNELS if cr.get(ch)])
         for tab, ch in zip(tabs, [ch for ch in CHANNELS if cr.get(ch)]):
             r = cr[ch]
             with tab:
-                left, right = st.columns([2, 1])
-                with left:
-                    def fmt_k(x):
-                        return f"{x/1000:.1f}K" if x >= 1000 else str(int(x))
+                wmape_pct          = r['err'] * 100
+                wcolor, wlabel     = wmape_color(wmape_pct)
+                is_auto            = bool(r['all_fc'])
+                model_display      = r['model_label']
+                n_periods          = len(r['fdf'])
 
-                    date_strs = pd.to_datetime(r['fdf']['date']).dt.strftime('%b %d, %Y').tolist()
+                # ── Summary cards row ────────────────────────────────────────
+                mc1, mc2, mc3 = st.columns(3)
+                mc1.markdown(f"""
+<div style="background:#1E2028;border:1px solid #2E3245;border-radius:12px;padding:18px 20px;">
+  <div style="color:#8A8EA8;font-size:11px;text-transform:uppercase;letter-spacing:0.08em;margin-bottom:6px;">WMAPE (holdout)</div>
+  <div style="color:{wcolor};font-size:28px;font-weight:700;line-height:1;">{wmape_pct:.1f}%</div>
+  <div style="display:inline-block;margin-top:8px;background:{wcolor}22;color:{wcolor};
+              font-size:11px;font-weight:600;padding:3px 10px;border-radius:20px;
+              border:1px solid {wcolor}55;">{wlabel}</div>
+</div>""", unsafe_allow_html=True)
+                mc2.markdown(f"""
+<div style="background:#1E2028;border:1px solid #2E3245;border-radius:12px;padding:18px 20px;">
+  <div style="color:#8A8EA8;font-size:11px;text-transform:uppercase;letter-spacing:0.08em;margin-bottom:6px;">{'Selected Model' if is_auto else 'Model'}</div>
+  <div style="color:#DCCBFF;font-size:15px;font-weight:600;line-height:1.3;margin-top:4px;">{model_display}</div>
+</div>""", unsafe_allow_html=True)
+                mc3.markdown(f"""
+<div style="background:#1E2028;border:1px solid #2E3245;border-radius:12px;padding:18px 20px;">
+  <div style="color:#8A8EA8;font-size:11px;text-transform:uppercase;letter-spacing:0.08em;margin-bottom:6px;">Forecast Periods</div>
+  <div style="color:#F4EEE6;font-size:28px;font-weight:700;line-height:1;">{n_periods}</div>
+  <div style="color:#5A5E72;font-size:11px;margin-top:6px;">{r_units.lower()} intervals</div>
+</div>""", unsafe_allow_html=True)
 
-                    if r['all_fc']:
-                        # Auto-Select: winner first, then remaining models alphabetically
-                        others = sorted(k for k in r['all_fc'] if k != r['winner'])
+                st.markdown('<div style="margin-top:16px;"></div>', unsafe_allow_html=True)
+
+                # ── Main content: table + competition ────────────────────────
+                date_strs = pd.to_datetime(r['fdf']['date']).dt.strftime('%b %d, %Y').tolist()
+                winner_vals = [fmt_k(v) for v in r['fdf']['forecasted_offered']]
+
+                if is_auto and r['scores']:
+                    tbl_col, rank_col = st.columns([3, 2])
+                else:
+                    tbl_col = st.container()
+                    rank_col = None
+
+                with tbl_col:
+                    out = pd.DataFrame({
+                        'Date': date_strs,
+                        f"★ {r['winner']}": winner_vals
+                    })
+                    st.dataframe(out, use_container_width=True, hide_index=True, height=260)
+
+                if rank_col is not None:
+                    with rank_col:
+                        st.markdown(
+                            '<div style="color:#8A8EA8;font-size:11px;text-transform:uppercase;'
+                            'letter-spacing:0.08em;margin-bottom:12px;">Model Rankings</div>',
+                            unsafe_allow_html=True
+                        )
+                        sorted_scores = sorted(r['scores'].items(), key=lambda x: x[1])
+                        best_wmape    = sorted_scores[0][1]
+                        for rank, (mname, mscore) in enumerate(sorted_scores, 1):
+                            mpct   = mscore * 100
+                            mclr, mlbl = wmape_color(mpct)
+                            is_win = mname == r['winner']
+                            bar_w  = max(12, int(100 * (best_wmape / mscore))) if mscore > 0 else 100
+                            border = f"border:1px solid {mclr}88;" if is_win else "border:1px solid #2E3245;"
+                            bg     = f"background:#1E2028;" if is_win else "background:#17191F;"
+                            st.markdown(f"""
+<div style="{bg}{border}border-radius:10px;padding:10px 14px;margin-bottom:8px;">
+  <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px;">
+    <div style="color:{'#DCCBFF' if is_win else '#8A8EA8'};font-size:13px;font-weight:{'700' if is_win else '400'};">
+      {'★ ' if is_win else f'{rank}. '}{mname}
+    </div>
+    <div style="color:{mclr};font-size:13px;font-weight:600;">{mpct:.1f}%</div>
+  </div>
+  <div style="background:#2A2D3A;border-radius:4px;height:4px;">
+    <div style="background:{mclr};width:{bar_w}%;height:100%;border-radius:4px;"></div>
+  </div>
+</div>""", unsafe_allow_html=True)
+
+                # ── All-model comparison (expander) ──────────────────────────
+                if is_auto and r['all_fc']:
+                    with st.expander("📊  Compare all model forecasts"):
+                        others  = sorted(k for k in r['all_fc'] if k != r['winner'])
                         ordered = [r['winner']] + others
-                        tbl = {'Date': date_strs}
+                        cmp_tbl = {'Date': date_strs}
                         for name in ordered:
-                            vals = r['all_fc'][name]
                             label = f"★ {name}" if name == r['winner'] else name
-                            tbl[label] = [fmt_k(v) for v in vals]
-                        out = pd.DataFrame(tbl)
-                    else:
-                        out = pd.DataFrame({
-                            'Date': date_strs,
-                            'Forecasted Volume': [fmt_k(v) for v in r['fdf']['forecasted_offered']]
-                        })
-                    st.dataframe(out, use_container_width=True, hide_index=True, height=280)
-                with right:
-                    wmape_pct = r['err'] * 100
-                    delta_str = 'Excellent' if wmape_pct < 8 else \
-                                'Good'      if wmape_pct < 15 else \
-                                'Moderate'  if wmape_pct < 25 else 'Review'
-                    st.metric('WMAPE (holdout)', f"{wmape_pct:.1f}%", delta=delta_str)
-                    if r['scores']:
-                        st.markdown('**Competition Results**')
-                        sc_df = pd.DataFrame([
-                            {'Model': k, 'WMAPE': f"{v*100:.1f}%",
-                             '': '✓' if k == r['winner'] else ''}
-                            for k, v in sorted(r['scores'].items(), key=lambda x: x[1])
-                        ])
-                        st.dataframe(sc_df, use_container_width=True, hide_index=True)
+                            cmp_tbl[label] = [fmt_k(v) for v in r['all_fc'][name]]
+                        st.dataframe(pd.DataFrame(cmp_tbl),
+                                     use_container_width=True, hide_index=True)
     else:
         st.markdown(
             '<div style="text-align:center;padding:60px 0;color:#5A34A3;font-size:18px;">'

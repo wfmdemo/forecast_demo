@@ -17,7 +17,7 @@ st.set_page_config(
 )
 
 # ─── BRAND STYLES ────────────────────────────────────────────────────────────
-st.markdown("""
+st.markdown(""" s
 <style>
     .stApp { background-color: #1A1C22; }
     [data-testid="stSidebar"] {
@@ -749,7 +749,7 @@ def main():
 
         # Hold the overlay for a minimum of 45 seconds so there's time to read the fact
         _elapsed = time.time() - _overlay_start
-        _min_display = 45
+        _min_display = 20
         if _elapsed < _min_display:
             time.sleep(_min_display - _elapsed)
 

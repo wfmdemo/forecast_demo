@@ -153,21 +153,35 @@ def load_saved():
     return df
 
 # ─── HELPERS ─────────────────────────────────────────────────────────────────
+def _drop_partial(s_raw, s_resampled, units):
+    """Remove the last resampled bucket if it only contains partial-period data."""
+    last_day = s_raw.index[-1]
+    if units == 'Weekly':
+        # Weekly buckets end on Sunday (dayofweek == 6)
+        if last_day.dayofweek != 6:
+            return s_resampled.iloc[:-1]
+    elif units == 'Monthly':
+        # Monthly buckets end on the last calendar day of the month
+        month_end = last_day + pd.offsets.MonthEnd(0)
+        if last_day != month_end:
+            return s_resampled.iloc[:-1]
+    return s_resampled
+
 def aggregate(df, queue, units):
     s = df[df['queue'] == queue].set_index('date')['offered'].sort_index()
     if units == 'Weekly':
-        return s.resample('W').sum()
+        return _drop_partial(s, s.resample('W').sum(), units)
     if units == 'Monthly':
-        return s.resample('MS').sum()
+        return _drop_partial(s, s.resample('MS').sum(), units)
     return s  # Daily
 
 def aggregate_channel(df, channel, units):
     """Sum all queues within a channel — each channel runs independently."""
     s = df[df['channel'] == channel].groupby('date')['offered'].sum().sort_index()
     if units == 'Weekly':
-        return s.resample('W').sum()
+        return _drop_partial(s, s.resample('W').sum(), units)
     if units == 'Monthly':
-        return s.resample('MS').sum()
+        return _drop_partial(s, s.resample('MS').sum(), units)
     return s
 
 CHANNEL_COLORS = {
